@@ -17,10 +17,10 @@
 import torch
 from verl.utils import tensordict_utils as tu
 
-from verl_omni.pipelines.model_base import DiffusionTrainingRuntime
+from verl_omni.pipelines.model_base import DiffusionEngineHooks
 
 
-class BagelUniGRPORuntime(DiffusionTrainingRuntime):
+class BagelUniGRPOHooks(DiffusionEngineHooks):
     """Own algorithm state; the engine owns optimizer, scheduler and checkpoints."""
 
     def __init__(self, module, model_config, optimizer_config):
@@ -151,7 +151,7 @@ class BagelUniGRPORuntime(DiffusionTrainingRuntime):
         updater = self._get_updater(loss_cfg=loss_cfg)
         # NonTensorStack -> list[UniRolloutSample]; tu.get (not tu.get_non_tensor_data) unwraps the stack.
         samples = tu.get(data, "unigrpo_samples")
-        assert samples is not None, "UniGRPO runtime expects data['unigrpo_samples'] (list[UniRolloutSample])"
+        assert samples is not None, "UniGRPO hooks expect data['unigrpo_samples'] (list[UniRolloutSample])"
         advantages = [float(a) for a in data["advantages"]]
         ar_met = updater._ar_backward(samples, advantages)
         img_met = updater._image_backward(samples, advantages)

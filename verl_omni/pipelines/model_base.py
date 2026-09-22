@@ -25,8 +25,12 @@ from verl_omni.workers.config import DiffusionModelConfig
 logger = logging.getLogger(__name__)
 
 
-class DiffusionTrainingRuntime(ABC):
-    """Extension contract for algorithms that need a custom backward schedule."""
+class DiffusionEngineHooks(ABC):
+    """Stateful training, generation and evaluation hooks for the shared engine.
+
+    Hooks may accumulate gradients and retain algorithm state. The engine owns
+    gradient clearing, optimizer steps, scheduling and checkpoint management.
+    """
 
     @abstractmethod
     def forward_backward_batch(self, data: TensorDict, loss_function: Callable, forward_only: bool = False) -> dict:
@@ -136,10 +140,10 @@ class DiffusionModelBase(ABC):
         return None
 
     @classmethod
-    def build_training_runtime(cls, module, model_config, optimizer_config):
-        """Build optional DiffusionTrainingRuntime hooks; None keeps the default loop.
+    def build_engine_hooks(cls, module, model_config, optimizer_config):
+        """Build optional DiffusionEngineHooks; None keeps the default loop.
 
-        Called once after model sharding. Runtime state is local to this engine instance;
+        Called once after model sharding. Hook state is local to this engine instance;
         it must not own an optimizer or retain a reference to the engine itself.
         """
         return None

@@ -11,7 +11,7 @@ Unlike the FlowGRPO recipe, UniGRPO samples on the live FSDP actor module throug
 The implementation includes:
 
 - Adapter `verl_omni/pipelines/bagel_unigrpo/` (`BagelUniGRPO`, registered as `(OmniBagelForConditionalGeneration, unigrpo)`), `BagelUniPipeline`, `UniGRPOJointUpdater`, and KV-cache AR decoding.
-- Shared `PPODiffusersFSDPEngine` (`model_type=diffusion_model`) with adapter-selected FSDP2 sharding units and configuration-driven optimizer groups. `BagelUniGRPORuntime` supplies joint backward and generation hooks; the engine owns optimizer steps, scheduling and checkpoints.
+- Shared `PPODiffusersFSDPEngine` (`model_type=diffusion_model`) with adapter-selected FSDP2 sharding units and configuration-driven optimizer groups. `BagelUniGRPOHooks` supplies joint backward and generation hooks; the engine owns optimizer steps, scheduling and checkpoints.
 - Image loss `UniGRPOLoss` (`loss_mode=unigrpo`) with GRPO-Guard RatioNorm policy gradients and a velocity-MSE regularizer.
 
 ## Prerequisites

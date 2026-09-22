@@ -41,11 +41,11 @@ The training defaults are 512×512 images, 25 denoising steps, a three-step SDE 
 The recipe selects the shared `PPODiffusersFSDPEngine` with `model_type=diffusion_model`. The `(OmniBagelForConditionalGeneration, unigrpo)` adapter supplies two extension hooks:
 
 - `fsdp2_sharding_units(module)` selects transformer layers and the root leaves used by functional AR/image forwards. The engine applies its precision, offload and sharding policies. Other adapters return `None` and keep the default wrapping path.
-- `build_training_runtime(module, model_config, optimizer_config)` creates `BagelUniGRPORuntime`. It supplies joint backward, generation and evaluation through the `DiffusionTrainingRuntime` contract. Other adapters return `None` and keep the existing training loop.
+- `build_engine_hooks(module, model_config, optimizer_config)` creates `BagelUniGRPOHooks`. It supplies joint backward, generation and evaluation through the `DiffusionEngineHooks` contract. Other adapters return `None` and keep the existing training loop.
 
-The runtime accumulates gradients without owning an optimizer. Zeroing gradients, clipping, the optimizer step, scheduling and checkpoint management remain in the shared engine. Explicit leaf sharding uses shard-aware norm clipping over the FSDP mesh, avoiding per-parameter DTensor reductions. Optimizer parameter groups preserve the configured optimizer implementation and options; the first matching name substring wins.
+The hooks accumulate gradients without owning an optimizer. Zeroing gradients, clipping, the optimizer step, scheduling and checkpoint management remain in the shared engine. Explicit leaf sharding uses shard-aware norm clipping over the FSDP mesh, avoiding per-parameter DTensor reductions. Optimizer parameter groups preserve the configured optimizer implementation and options; the first matching name substring wins.
 
-The shared worker only dispatches `generate` and `evaluate` requests. BAGEL-specific token/trajectory handling lives in the runtime, and fixed-prompt PickScore evaluation plus file export lives in `BagelReportEvaluator`. Evaluation is broadcast to all ranks for weight synchronization, then only rank zero exports samples.
+The shared worker only dispatches `generate` and `evaluate` requests. BAGEL-specific token/trajectory handling lives in the hook implementation, and fixed-prompt PickScore evaluation plus file export lives in `BagelReportEvaluator`. Evaluation is broadcast to all ranks for weight synchronization, then only rank zero exports samples.
 
 ## Configuration and usage
 
@@ -80,7 +80,7 @@ actor_rollout_ref:
     n: 8
 ```
 
-See the [BAGEL recipe](../examples/bagel/unigrpo_trainer_bagel.md) for dataset preparation, resource requirements and report export. Full fine-tuning with FSDP2 and CUDA is the validated path; this recipe does not establish FSDP1, NPU, LoRA or vLLM rollout support. It implements the $M=1$ shared-advantage setting, and does not claim to reproduce the paper's absolute benchmark scores. The regularizer snapshot is runtime state rather than checkpoint state: restarting from a checkpoint initializes a new reference snapshot before its first image update.
+See the [BAGEL recipe](../examples/bagel/unigrpo_trainer_bagel.md) for dataset preparation, resource requirements and report export. Full fine-tuning with FSDP2 and CUDA is the validated path; this recipe does not establish FSDP1, NPU, LoRA or vLLM rollout support. It implements the $M=1$ shared-advantage setting, and does not claim to reproduce the paper's absolute benchmark scores. The regularizer snapshot is held by the hooks rather than checkpointed: restarting from a checkpoint initializes a new reference snapshot before its first image update.
 
 ## References
 

@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 class BagelReportEvaluator:
     """Synchronize on all ranks, then generate and export samples on rank zero."""
 
-    def __init__(self, runtime):
-        self.runtime = runtime
+    def __init__(self, hooks):
+        self.hooks = hooks
         self._report_tokenizer = None
         self._report_scorer = None
 
@@ -49,7 +49,7 @@ class BagelReportEvaluator:
         seed = tu.get_non_tensor_data(data, "seed", default=1234)
         if not out_dir:
             raise ValueError("Report evaluation requires output_dir")
-        runtime = self.runtime
+        hooks = self.hooks
         import os
 
         import torch.distributed as dist
@@ -63,23 +63,23 @@ class BagelReportEvaluator:
         )
 
         device = torch.device(get_device_name(), get_device_id())
-        model_path = runtime.model_config.local_path or runtime.model_config.path
-        if runtime._replica is None:
-            runtime._replica = build_replica(model_path, device)
+        model_path = hooks.model_config.local_path or hooks.model_config.path
+        if hooks._replica is None:
+            hooks._replica = build_replica(model_path, device)
         else:
-            runtime._replica.to(device)
+            hooks._replica.to(device)
 
         # Collective (all ranks): refresh the replica from the current FSDP master weights.
-        was_training = runtime.module.training
-        runtime.module.eval()
+        was_training = hooks.module.training
+        hooks.module.eval()
         try:
-            sync_replica_from_master(runtime._replica, runtime.module)
+            sync_replica_from_master(hooks._replica, hooks.module)
         finally:
-            runtime.module.train(was_training)
+            hooks.module.train(was_training)
 
         rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
         if rank != 0:
-            runtime._replica.to("cpu")
+            hooks._replica.to("cpu")
             get_torch_device().empty_cache()
             return None
 
@@ -92,9 +92,9 @@ class BagelReportEvaluator:
 
             from verl_omni.utils.reward_score.pickscore_reward import _PickScoreInferencer, _to_pil_hwc
 
-            runtime._replica.eval()
+            hooks._replica.eval()
             pipeline = BagelUniPipeline(
-                runtime._replica, **build_unigrpo_pipeline_kwargs(runtime.model_config, runtime._replica)
+                hooks._replica, **build_unigrpo_pipeline_kwargs(hooks.model_config, hooks._replica)
             )
             sdir = os.path.join(out_dir, "report_ff", f"step_{int(step):04d}")
             os.makedirs(sdir, exist_ok=True)
@@ -138,7 +138,7 @@ class BagelReportEvaluator:
         finally:
             import gc
 
-            runtime._replica.to("cpu")
+            hooks._replica.to("cpu")
             if self._report_scorer is not None:
                 del self._report_scorer
                 self._report_scorer = None

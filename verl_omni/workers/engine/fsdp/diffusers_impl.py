@@ -153,7 +153,7 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
         # Set True in _build_fsdp_module to skip that manual load.
         self._uses_fsdp2_cpu_offload_policy = False
         self._explicit_fsdp2_units = False
-        self._training_runtime = None
+        self._engine_hooks = None
 
     @property
     def is_param_offload_enabled(self) -> bool:
@@ -551,7 +551,7 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
         self.scheduler = scheduler
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-        self._training_runtime = DiffusionModelBase.get_class(self.model_config).build_training_runtime(
+        self._engine_hooks = DiffusionModelBase.get_class(self.model_config).build_engine_hooks(
             module, self.model_config, self.optimizer_config
         )
 
@@ -703,16 +703,16 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
         pass
 
     def generate_rollout(self, data: TensorDict) -> TensorDict:
-        """Dispatch actor-side sampling to the registered runtime."""
-        if self._training_runtime is None:
-            raise NotImplementedError("The selected model adapter has no actor-side sampling runtime")
-        return self._training_runtime.generate(data)
+        """Dispatch actor-side sampling to the registered hooks."""
+        if self._engine_hooks is None:
+            raise NotImplementedError("The selected model adapter has no actor-side sampling hooks")
+        return self._engine_hooks.generate(data)
 
     def evaluate_rollout(self, data: TensorDict) -> TensorDict | None:
         """Dispatch a broadcast evaluation request; all actor ranks must participate."""
-        if self._training_runtime is None:
-            raise NotImplementedError("The selected model adapter has no actor-side evaluation runtime")
-        return self._training_runtime.evaluate(data)
+        if self._engine_hooks is None:
+            raise NotImplementedError("The selected model adapter has no actor-side evaluation hooks")
+        return self._engine_hooks.evaluate(data)
 
     def optimizer_zero_grad(self):
         """
@@ -1094,8 +1094,8 @@ class PPODiffusersFSDPEngine(DiffusersFSDPEngine):
     def forward_backward_batch(
         self, data: TensorDict, loss_function: Callable, forward_only: bool = False
     ) -> list[TensorDict]:
-        if self._training_runtime is not None:
-            return self._training_runtime.forward_backward_batch(data, loss_function, forward_only)
+        if self._engine_hooks is not None:
+            return self._engine_hooks.forward_backward_batch(data, loss_function, forward_only)
         return self._run_forward_backward_batch(data, loss_function, forward_only, timesteps_key="all_timesteps")
 
     def prepare_model_inputs(self, micro_batch: TensorDict, step: int):

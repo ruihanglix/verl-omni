@@ -25,16 +25,16 @@ from verl.utils import tensordict_utils as tu
 from verl.workers.config import FSDPOptimizerConfig
 
 from verl_omni.pipelines.bagel_unigrpo.diffusers_training_adapter import BagelUniGRPO
-from verl_omni.pipelines.bagel_unigrpo.training_runtime import BagelUniGRPORuntime
-from verl_omni.pipelines.model_base import DiffusionModelBase, DiffusionTrainingRuntime
+from verl_omni.pipelines.bagel_unigrpo.hooks import BagelUniGRPOHooks
+from verl_omni.pipelines.model_base import DiffusionEngineHooks, DiffusionModelBase
 from verl_omni.workers.engine.fsdp.diffusers_impl import PPODiffusersFSDPEngine
 from verl_omni.workers.engine.fsdp.training_utils import optimizer_parameters
 
 
-def _engine(module, runtime=None):
+def _engine(module, hooks=None):
     engine = object.__new__(PPODiffusersFSDPEngine)
     engine.module = module
-    engine._training_runtime = runtime
+    engine._engine_hooks = hooks
     engine._explicit_fsdp2_units = False
     engine.optimizer_config = FSDPOptimizerConfig(lr=0.1, weight_decay=0.0, clip_grad=100.0)
     engine.optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
@@ -44,7 +44,7 @@ def _engine(module, runtime=None):
 def test_default_adapter_hooks_preserve_existing_path():
     module = torch.nn.Linear(1, 1)
     assert DiffusionModelBase.fsdp2_sharding_units(module) is None
-    assert DiffusionModelBase.build_training_runtime(module, None, None) is None
+    assert DiffusionModelBase.build_engine_hooks(module, None, None) is None
     engine = _engine(module)
     engine._run_forward_backward_batch = Mock(return_value={"default": True})
     data = TensorDict({}, [])
@@ -56,11 +56,11 @@ def test_default_adapter_hooks_preserve_existing_path():
         engine.evaluate_rollout(data)
 
 
-def test_non_bagel_runtime_accumulates_two_losses_before_one_engine_step():
+def test_non_bagel_hooks_accumulate_two_losses_before_one_engine_step():
     module = torch.nn.Linear(1, 1, bias=False)
     module.weight.data.fill_(1.0)
 
-    class TwoLossRuntime(DiffusionTrainingRuntime):
+    class TwoLossHooks(DiffusionEngineHooks):
         def forward_backward_batch(self, data, loss_function, forward_only=False):
             if not forward_only:
                 (module.weight.square().sum()).backward()
@@ -73,7 +73,7 @@ def test_non_bagel_runtime_accumulates_two_losses_before_one_engine_step():
         def evaluate(self, data):
             return data
 
-    engine = _engine(module, TwoLossRuntime())
+    engine = _engine(module, TwoLossHooks())
     engine.optimizer.step = Mock(wraps=engine.optimizer.step)
     data = TensorDict({}, [])
     engine.optimizer_zero_grad()
@@ -124,24 +124,24 @@ def test_bagel_adapter_selects_functionally_called_leaves():
     units = BagelUniGRPO.fsdp2_sharding_units(module)
     assert units == [*module.layers, module.embed_tokens, module.lm_head]
     assert module not in units
-    first = BagelUniGRPO.build_training_runtime(module, None, None)
-    second = BagelUniGRPO.build_training_runtime(module, None, None)
-    assert isinstance(first, DiffusionTrainingRuntime)
+    first = BagelUniGRPO.build_engine_hooks(module, None, None)
+    second = BagelUniGRPO.build_engine_hooks(module, None, None)
+    assert isinstance(first, DiffusionEngineHooks)
     assert first is not second
     assert first._updater is None and first._replica is None
 
 
-def test_bagel_runtime_rejects_forward_only_instead_of_returning_fake_loss():
-    runtime = BagelUniGRPORuntime(torch.nn.Linear(1, 1), None, None)
+def test_bagel_hooks_reject_forward_only_instead_of_returning_fake_loss():
+    hooks = BagelUniGRPOHooks(torch.nn.Linear(1, 1), None, None)
     with pytest.raises(NotImplementedError, match="requires backward"):
-        runtime.forward_backward_batch(TensorDict({}, []), None, forward_only=True)
+        hooks.forward_backward_batch(TensorDict({}, []), None, forward_only=True)
 
 
 def test_actor_loss_config_applies_even_when_rollout_created_updater_first():
-    runtime = BagelUniGRPORuntime(torch.nn.Linear(1, 1), None, None)
-    runtime._updater = SimpleNamespace(_loss_cfg=SimpleNamespace(diffusion_loss=SimpleNamespace()))
+    hooks = BagelUniGRPOHooks(torch.nn.Linear(1, 1), None, None)
+    hooks._updater = SimpleNamespace(_loss_cfg=SimpleNamespace(diffusion_loss=SimpleNamespace()))
     cfg = SimpleNamespace(mse_weight=0.0, ratio_norm=False, clip_ratio=0.1, adv_clip_max=2.0)
-    updater = runtime._get_updater(cfg)
+    updater = hooks._get_updater(cfg)
     assert updater.mse_weight == 0.0
     assert updater.ratio_norm is False
     assert vars(updater._loss_cfg.diffusion_loss) == vars(cfg)
@@ -158,16 +158,16 @@ def test_worker_dispatch_is_algorithm_independent():
     engine.evaluate_rollout.assert_called_once_with(request)
 
 
-def test_bagel_runtime_backward_only_does_not_own_optimizer():
+def test_bagel_hooks_backward_does_not_step_optimizer():
     module = torch.nn.Linear(1, 1, bias=False)
-    runtime = BagelUniGRPORuntime(module, None, None)
+    hooks = BagelUniGRPOHooks(module, None, None)
 
     def backward(scale, metric):
         loss = scale * module.weight.square().sum()
         loss.backward()
         return {metric: loss.item()}
 
-    runtime._updater = SimpleNamespace(
+    hooks._updater = SimpleNamespace(
         _ar_backward=lambda *_: backward(1, "ar/loss"),
         _image_backward=lambda *_: backward(3, "image/loss"),
         _loss_cfg=SimpleNamespace(diffusion_loss=SimpleNamespace()),
@@ -177,11 +177,11 @@ def test_bagel_runtime_backward_only_does_not_own_optimizer():
         diffusion_loss=SimpleNamespace(mse_weight=0.0, ratio_norm=True, clip_ratio=1e-6, adv_clip_max=5.0)
     )
     weight = module.weight.detach().clone()
-    result = runtime.forward_backward_batch(data, partial(lambda **kw: None, config=cfg))
+    result = hooks.forward_backward_batch(data, partial(lambda **kw: None, config=cfg))
     torch.testing.assert_close(module.weight, weight)
     torch.testing.assert_close(module.weight.grad, weight * 8)
     assert set(result) == {"loss", "metrics", "model_output"}
-    assert not hasattr(runtime, "optimizer")
+    assert not hasattr(hooks, "optimizer")
 
 
 @pytest.mark.parametrize("rank,fail_export", [(0, False), (1, False), (0, True)])
@@ -197,7 +197,7 @@ def test_report_evaluation_syncs_all_ranks_and_limits_export(monkeypatch, tmp_pa
     module = torch.nn.Linear(1, 1)
     replica = torch.nn.Linear(1, 1)
     config = SimpleNamespace(local_path="unused", path="unused")
-    runtime = BagelUniGRPORuntime(module, config, None)
+    hooks = BagelUniGRPOHooks(module, config, None)
     sync = Mock()
     generate = Mock(return_value=([1], torch.zeros(3, 8, 8, dtype=torch.uint8)))
     if fail_export:
@@ -224,7 +224,7 @@ def test_report_evaluation_syncs_all_ranks_and_limits_export(monkeypatch, tmp_pa
     )
     data = tu.get_tensordict({"prompt_token_ids": [[1, 2]], "ground_truth": ["prompt"]})
     tu.assign_non_tensor(data, output_dir=str(tmp_path), step=3, seed=42)
-    result = BagelReportEvaluator(runtime).evaluate(data)
+    result = BagelReportEvaluator(hooks).evaluate(data)
     sync.assert_called_once_with(replica, module)
     assert module.training
     assert next(replica.parameters()).device.type == "cpu"
@@ -243,16 +243,16 @@ def test_report_evaluation_syncs_all_ranks_and_limits_export(monkeypatch, tmp_pa
 
 
 def test_evaluation_preserves_training_rng(monkeypatch):
-    runtime = BagelUniGRPORuntime(torch.nn.Linear(1, 1), None, None)
+    hooks = BagelUniGRPOHooks(torch.nn.Linear(1, 1), None, None)
 
     def evaluate(_):
         torch.manual_seed(123)
         return torch.rand(3)
 
-    runtime._evaluator = SimpleNamespace(evaluate=evaluate)
+    hooks._evaluator = SimpleNamespace(evaluate=evaluate)
     fork_rng = torch.random.fork_rng
     monkeypatch.setattr(torch.random, "fork_rng", lambda **_: fork_rng(devices=[]))
     monkeypatch.setattr("verl.utils.device.get_device_id", lambda: 0)
     before = torch.random.get_rng_state().clone()
-    runtime.evaluate(TensorDict({}, []))
+    hooks.evaluate(TensorDict({}, []))
     assert torch.equal(before, torch.random.get_rng_state())
