@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trainside (in-process, torch-only) rollout helpers for BAGEL UniGRPO.
+"""Native (in-process, torch-only) rollout helpers for BAGEL UniGRPO.
 
 The training actor's live ``BagelForSFT`` module IS the sampler -- no vLLM, no
 weight-sync server. Sampling on the FSDP-sharded model pays an all-gather (and, under
@@ -20,7 +20,7 @@ offload, a H2D copy) on every one of the thousands of small forwards a variable-
 AR decode issues, which is the full-FT throughput wall. Instead each rank drives a flat
 full-param **bf16 replica** (``build_replica``) it re-syncs from the FSDP master once per
 step (``sync_replica_from_master``); the update still runs on the FSDP model. Ported from
-UniRL ``rollout/engine/trainside`` + the standalone ``train_bagel_unigrpo`` trainer.
+UniRL actor-side rollout implementation plus the standalone ``train_bagel_unigrpo`` trainer.
 """
 
 from __future__ import annotations

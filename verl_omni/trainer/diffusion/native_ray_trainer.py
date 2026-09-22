@@ -11,10 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Trainside UniGRPO diffusion trainer (BAGEL joint AR-thinking + image, no vLLM).
+"""Diffusion trainer for native actor-side rollout and joint policy updates.
 
 Reuses ``PolicyGradientRayTrainer``'s worker init, reward, advantage, checkpoint, and
-logging helpers, but replaces the vLLM/AgentLoop rollout with a trainside worker
+logging helpers, but replaces the vLLM/AgentLoop rollout with a native worker
 ``generate`` call that samples on the live FSDP actor module (via a flat bf16 replica) and
 re-anchors ``old_logp`` there. Selected by ``algorithm.trainer_type=unigrpo`` from
 ``main_diffusion._get_trainer_cls``.
@@ -47,19 +47,9 @@ from verl_omni.trainer.diffusion.ray_diffusion_trainer import (
 )
 from verl_omni.workers.config.reward import reward_role_required
 
-REPORT_PROMPTS = [
-    "A curious cat exploring a haunted mansion",
-    "a spanish water dog breed as arthur morgan from red dead redemption",
-    "A close-up photograph of a fat orange cat with lasagna in its mouth. Shot on Leica M6.",
-    "toilet design toilet in style of dodge charger toilet, black, photo",
-    "an attractive young woman rolling her eyes",
-]
-"""Five fixed report prompts (verbatim from the reference run) re-sampled at each report
-checkpoint so only the weights vary across steps -- continuity with the prior report."""
 
-
-class UniGRPORayTrainer(PolicyGradientRayTrainer):
-    """Trainside UniGRPO trainer: worker ``generate`` -> reward -> flow_grpo advantage -> joint update."""
+class NativeRayDiffusionTrainer(PolicyGradientRayTrainer):
+    """Run native rollout, reward, advantage, and the model-owned policy update."""
 
     def init_workers(self):
         """Colocated actor workers + a standalone reward loop; no vLLM rollout / checkpoint sync."""
@@ -77,7 +67,7 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
             rm_resource_pool=reward_pool,
             accelerator_resource_pool=actor_rollout_resource_pool,
         )
-        # Trainside samples on the live FSDP module, so there is no vLLM server, no async rollout
+        # Native samples on the live FSDP module, so there is no vLLM server, no async rollout
         # manager, no streaming reward, and nothing to sync weights to.
         self.enable_agent_reward_loop = False
         self.llm_server_manager = None
@@ -85,15 +75,11 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
         self.checkpoint_manager = NoOpCheckpointManager()
 
     def _validate(self):
-        """Trainside has no vLLM rollout to validate through; skip with a marker.
+        """Native rollout has no standard server-side validation endpoint."""
+        return {"val/native/skipped": 1.0}
 
-        The reference recipe runs its evaluation/report generation as a separate offline pass
-        (see the session report generator), so in-loop validation is intentionally a no-op here.
-        """
-        return {"val/trainside/skipped": 1.0}
-
-    def _generate_trainside(self, gen_batch_output: DataProto) -> DataProto:
-        """Run the trainside worker ``generate`` and return a DataProto of images + rollout samples."""
+    def _generate_native(self, gen_batch_output: DataProto) -> DataProto:
+        """Run the native worker ``generate`` and return a DataProto of images + rollout samples."""
         from verl.utils import tensordict_utils as tu
 
         # The gen batch's only field is a variable-length ``prompt_token_ids`` stored as non-tensor
@@ -110,145 +96,8 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
         gen_output = self.actor_rollout_wg.generate(gen_td)
         return DataProto.from_tensordict(gen_output)
 
-    def _init_report(self):
-        """Set up periodic report dumping when ``UNIGRPO_REPORT_DIR`` is set (else a no-op).
-
-        Loads the five fixed report prompts' token ids + ground-truth text from the training
-        parquet (matched by text, so row order is irrelevant), records the run settings for the
-        report env table, resets the per-step curve log, and writes the initial manifest. The
-        report dir lives on shared storage both the driver and rank-0 worker can see.
-        """
-        import os
-
-        self._report_dir = os.environ.get("UNIGRPO_REPORT_DIR")
-        self._eval_prompts, self._eval_gts = [], []
-        if not self._report_dir:
-            return
-        self._report_seed = int(os.environ.get("UNIGRPO_REPORT_SEED", "1234"))
-        self._report_freq = max(int(os.environ.get("UNIGRPO_REPORT_FREQ", "5")), 1)
-        try:
-            import pandas as pd
-
-            train_files = self.config.data.train_files
-            if isinstance(train_files, list | tuple):
-                train_files = train_files[0]
-            df = pd.read_parquet(train_files)
-
-            def _prompt_text(row):
-                prompt = row["prompt"]
-                try:
-                    return prompt[0]["content"]
-                except Exception:
-                    return str(prompt)
-
-            texts = [_prompt_text(df.iloc[i]) for i in range(len(df))]
-            for report_prompt in REPORT_PROMPTS:
-                if report_prompt in texts:
-                    row = df.iloc[texts.index(report_prompt)]
-                    self._eval_prompts.append([int(t) for t in row["prompt_token_ids"]])
-                    self._eval_gts.append(report_prompt)
-        except Exception:
-            import traceback
-
-            print(f"[unigrpo report] prompt load failed, dumping disabled:\n{traceback.format_exc()}", flush=True)
-            self._report_dir = None
-            return
-        if not self._eval_prompts:
-            print("[unigrpo report] none of the fixed prompts found in train_files; dumping disabled", flush=True)
-            self._report_dir = None
-            return
-        os.makedirs(os.path.join(self._report_dir, "report_ff"), exist_ok=True)
-        self._report_curve_path = os.path.join(self._report_dir, "train_rank0.jsonl")
-        open(self._report_curve_path, "w").close()
-        ar = self.config.actor_rollout_ref
-        pipe = ar.rollout.pipeline
-        self._report_settings = {
-            "model": str(ar.model.path),
-            "G_samples_per_prompt": int(ar.rollout.n),
-            "num_inference_steps(train)": int(pipe.num_inference_steps),
-            "image_size": f"{int(pipe.height)}x{int(pipe.width)}",
-            "base_lr(und)": ar.actor.optim.lr,
-            "moe_gen_lr": dict(getattr(ar.actor.optim, "param_group_lrs", None) or {}),
-            "mse_weight": ar.actor.diffusion_loss.mse_weight,
-            "image_clip_ratio": ar.actor.diffusion_loss.clip_ratio,
-            "ratio_norm": bool(ar.actor.diffusion_loss.ratio_norm),
-            "sde_noise_level": ar.rollout.algo.noise_level,
-            "sde_window_size": ar.rollout.algo.sde_window_size,
-            "rollout": str(ar.rollout.name),
-            "nodes_x_gpus": f"{int(self.config.trainer.nnodes)} x {int(self.config.trainer.n_gpus_per_node)}",
-            "eval_setting": "official CFG=4, 50 steps, global renorm",
-        }
-        self._write_report_manifest("running")
-        print(
-            f"[unigrpo report] enabled -> {self._report_dir} "
-            f"({len(self._eval_prompts)} prompts, seed {self._report_seed}, every {self._report_freq} steps)",
-            flush=True,
-        )
-
-    def _report_step_list(self):
-        """Report checkpoints (update counts) the run will dump: 0, freq, 2*freq, ..., total."""
-        freq = getattr(self, "_report_freq", 5)
-        total = int(self.total_training_steps)
-        return sorted({0, total, *range(freq, total + 1, freq)})
-
-    def _write_report_manifest(self, status):
-        import json
-        import os
-
-        if not getattr(self, "_report_dir", None):
-            return
-        manifest = dict(self._report_settings)
-        manifest.update(
-            {
-                "prompts": list(self._eval_gts),
-                "seed": self._report_seed,
-                "steps": self._report_step_list(),
-                "status": status,
-            }
-        )
-        with open(os.path.join(self._report_dir, "report_ff", "manifest.json"), "w") as handle:
-            json.dump(manifest, handle, indent=2)
-
-    def _dump_report(self, step, status="running"):
-        """Trigger the trainside worker report dump at ``step`` (update count) and refresh manifest."""
-        if not getattr(self, "_report_dir", None):
-            return
-        try:
-            from verl.utils import tensordict_utils as tu
-
-            request = tu.get_tensordict({"prompt_token_ids": self._eval_prompts, "ground_truth": self._eval_gts})
-            tu.assign_non_tensor(request, output_dir=self._report_dir, step=int(step), seed=self._report_seed)
-            self.actor_rollout_wg.evaluate(request)
-        except Exception:
-            import traceback
-
-            print(f"[unigrpo report] dump at step {step} failed (non-fatal):\n{traceback.format_exc()}", flush=True)
-        self._write_report_manifest(status)
-
-    def _log_report_curve(self, step, batch, reward_tensor):
-        """Append ``{step, rollout_reward_mean, avg_think_len}`` for this step to the curve jsonl."""
-        import json
-
-        if not getattr(self, "_report_dir", None):
-            return
-        try:
-            reward_mean = float(reward_tensor.float().mean().item())
-        except Exception:
-            reward_mean = float("nan")
-        avg_think_len = float("nan")
-        samples = batch.non_tensor_batch.get("unigrpo_samples")
-        if samples is not None and len(samples) > 0:
-            lens = [len(getattr(s, "thinking_token_ids", [])) for s in samples]
-            if lens:
-                avg_think_len = float(sum(lens) / len(lens))
-        with open(self._report_curve_path, "a") as handle:
-            handle.write(
-                json.dumps({"step": int(step), "rollout_reward_mean": reward_mean, "avg_think_len": avg_think_len})
-                + "\n"
-            )
-
     def fit(self):
-        """Trainside training loop: worker generate -> reward -> flow_grpo advantage -> joint update."""
+        """Native training loop: worker generate -> reward -> flow_grpo advantage -> joint update."""
         from omegaconf import OmegaConf
         from verl.utils.tracking import Tracking
 
@@ -259,8 +108,6 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
             config=OmegaConf.to_container(self.config, resolve=True),
         )
 
-        self._init_report()
-
         self.global_steps = 0
         self._load_checkpoint()
 
@@ -270,9 +117,6 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
                 return
-
-        if self.global_steps == 0:
-            self._dump_report(0, status="running")
 
         progress_bar = tqdm(total=self.total_training_steps, initial=self.global_steps, desc="Training Progress")
         self.global_steps += 1
@@ -306,12 +150,12 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
 
                 is_last_step = self.global_steps >= self.total_training_steps
                 with marked_timer("step", timing_raw):
-                    # Trainside rollout on the live FSDP actor module (no vLLM).
+                    # Native rollout on the live FSDP actor module (no vLLM).
                     with marked_timer("gen", timing_raw, color="red"):
-                        gen_output = self._generate_trainside(gen_batch_output)
+                        gen_output = self._generate_native(gen_batch_output)
                     batch = gen_batch_output.union(gen_output)
 
-                    # Reward is always computed here (trainside never streams it during rollout).
+                    # Reward is always computed here (native never streams it during rollout).
                     with marked_timer("reward", timing_raw, color="yellow"):
                         batch_reward = self._compute_reward_colocate(batch)
                         batch = batch.union(batch_reward)
@@ -334,8 +178,6 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
                             global_std=self.config.algorithm.global_std,
                             config=self.config.algorithm,
                         )
-
-                    self._log_report_curve(self.global_steps, batch, reward_tensor)
 
                     # Joint AR + image update on the FSDP module (record_old_logp already anchored
                     # old_logp inside generate). num_updates_per_batch == number of framework
@@ -384,9 +226,6 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
                 metrics.update(compute_reward_extra_metrics_diffusion(reward_extra_infos_dict))
                 logger.log(data=metrics, step=self.global_steps)
 
-                if getattr(self, "_report_dir", None) and (self.global_steps % self._report_freq == 0 or is_last_step):
-                    self._dump_report(self.global_steps, status="done" if is_last_step else "running")
-
                 progress_bar.update(1)
                 self.global_steps += 1
 
@@ -396,4 +235,4 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
                     return
 
 
-__all__ = ["UniGRPORayTrainer"]
+__all__ = ["NativeRayDiffusionTrainer"]

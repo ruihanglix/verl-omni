@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trainside "thinking -> image" pipeline for BAGEL UniGRPO (torch-only, no vLLM).
+"""Native "thinking -> image" pipeline for BAGEL UniGRPO (torch-only, no vLLM).
 
 Ported from UniRL ``models/bagel/pipeline.py`` (``BagelUniPipeline._generate_t2ti``)
 onto verl-omni's ``BagelForSFT``: generate an AR thinking chain on the understanding
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class UniRolloutSample:
-    """One trainside thinking->image rollout trajectory (all tensors on CPU unless noted)."""
+    """One native thinking->image rollout trajectory (all tensors on CPU unless noted)."""
 
     prompt_token_ids: list[int]
     thinking_token_ids: list[int]
@@ -94,7 +94,7 @@ def _unpatchify(patches: torch.Tensor, config, grid_h: int, grid_w: int) -> torc
 
 
 class BagelUniPipeline:
-    """Trainside prompt -> thinking -> image sampler over one live ``BagelForSFT`` module."""
+    """Native prompt -> thinking -> image sampler over one live ``BagelForSFT`` module."""
 
     def __init__(
         self,

@@ -708,12 +708,6 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
             raise NotImplementedError("The selected model adapter has no actor-side sampling hooks")
         return self._engine_hooks.generate(data)
 
-    def evaluate_rollout(self, data: TensorDict) -> TensorDict | None:
-        """Dispatch a broadcast evaluation request; all actor ranks must participate."""
-        if self._engine_hooks is None:
-            raise NotImplementedError("The selected model adapter has no actor-side evaluation hooks")
-        return self._engine_hooks.evaluate(data)
-
     def optimizer_zero_grad(self):
         """
         Zero gradients and enforce FSDP grad-clipping logic.

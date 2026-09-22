@@ -91,7 +91,7 @@ class BagelUniGRPO(BagelDiffusion):
 
     @classmethod
     def build_engine_hooks(cls, module, model_config, optimizer_config):
-        """Attach joint backward and trainside sampling to the shared PPO engine."""
+        """Attach joint backward and native sampling to the shared PPO engine."""
         from .hooks import BagelUniGRPOHooks
 
         return BagelUniGRPOHooks(module, model_config, optimizer_config)

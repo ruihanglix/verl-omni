@@ -14,7 +14,7 @@
 """UniGRPO joint update: AR-GRPO backward + UniGRPO image backward -> ONE optimizer step.
 
 Single-process port of UniRL ``train/unified_model_stack.py`` (2-backwards->1-step,
-per-expert LR) onto verl-omni's committed trainside pieces (``BagelUniPipeline`` rollout,
+per-expert LR) onto verl-omni's committed native pieces (``BagelUniPipeline`` rollout,
 ``bagel_ar_thinking.replay_thinking_logprobs``, ``BagelDiffusion`` per-step replay,
 ``UniGRPOLoss``). No vLLM. The AR (understanding) and image (generation) tracks share
 the ONE MoT transformer; their two backward passes accumulate into the same grads and a

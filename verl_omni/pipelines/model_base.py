@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class DiffusionEngineHooks(ABC):
-    """Stateful training, generation and evaluation hooks for the shared engine.
+    """Stateful training and generation hooks for the shared engine.
 
     Hooks may accumulate gradients and retain algorithm state. The engine owns
     gradient clearing, optimizer steps, scheduling and checkpoint management.
@@ -45,14 +45,6 @@ class DiffusionEngineHooks(ABC):
     def generate(self, data: TensorDict) -> TensorDict:
         """Generate a local batch; all actor ranks enter this operation together."""
         raise NotImplementedError(f"{type(self).__name__} does not support actor-side generation")
-
-    def evaluate(self, data: TensorDict) -> TensorDict | None:
-        """Evaluate a broadcast request on all ranks; non-output ranks may return None.
-
-        Complete collective work before rank-local export. Rank-local export failures
-        must not leave peer ranks waiting at subsequent training collectives.
-        """
-        raise NotImplementedError(f"{type(self).__name__} does not support actor-side evaluation")
 
 
 class DiffusionModelBase(ABC):

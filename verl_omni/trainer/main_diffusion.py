@@ -164,9 +164,9 @@ def _get_trainer_cls(config):
     if trainer_type == "direct_preference":
         return DirectPreferenceRayTrainer
     if trainer_type == "unigrpo":
-        from verl_omni.trainer.diffusion.unigrpo_ray_trainer import UniGRPORayTrainer
+        from verl_omni.trainer.diffusion.native_ray_trainer import NativeRayDiffusionTrainer
 
-        return UniGRPORayTrainer
+        return NativeRayDiffusionTrainer
     raise ValueError(
         f"Unsupported diffusion trainer_type {trainer_type!r}. "
         "Expected one of: 'policy_gradient', 'direct_preference', 'unigrpo'."
@@ -196,13 +196,10 @@ class TaskRunner:
         from verl_omni.workers.engine_workers import ActorRolloutRefWorker
 
         actor_rollout_cls = ActorRolloutRefWorker
-        if (
-            config.algorithm.trainer_type == "unigrpo"
-            and OmegaConf.select(config, "actor_rollout_ref.rollout.name") == "trainside"
-        ):
-            from verl_omni.workers.trainside_workers import TrainsideWorker
+        if OmegaConf.select(config, "actor_rollout_ref.rollout.name") == "native":
+            from verl_omni.workers.native_workers import NativeRolloutWorker
 
-            actor_rollout_cls = TrainsideWorker
+            actor_rollout_cls = NativeRolloutWorker
         ray_worker_group_cls = RayWorkerGroup
 
         lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)

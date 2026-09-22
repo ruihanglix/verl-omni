@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Trainside worker role and distributed dispatch regression tests."""
+"""Native worker role and distributed dispatch regression tests."""
 
 from inspect import unwrap
 from pathlib import Path
@@ -23,23 +23,27 @@ import pytest
 import torch
 from hydra import compose, initialize_config_dir
 from tensordict import TensorDict
-from verl.single_controller.base.decorator import MAGIC_ATTR, Dispatch
 from verl.trainer.ppo.utils import Role
 
 from verl_omni.trainer import main_diffusion
 from verl_omni.workers.engine_workers import ActorRolloutRefWorker
-from verl_omni.workers.trainside_workers import TrainsideWorker
+from verl_omni.workers.native_workers import NativeRolloutWorker
 
 
 @pytest.mark.parametrize(
-    "rollout_name, expected", [("trainside", TrainsideWorker), ("vllm_omni", ActorRolloutRefWorker)]
+    "rollout_name, expected", [("native", NativeRolloutWorker), ("vllm_omni", ActorRolloutRefWorker)]
 )
 def test_runner_selects_worker_without_changing_group_role(monkeypatch, rollout_name, expected):
     config_dir = Path(main_diffusion.__file__).parent / "config"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         config = compose(
             config_name="diffusion_trainer",
-            overrides=["algorithm.trainer_type=unigrpo", f"actor_rollout_ref.rollout.name={rollout_name}"],
+            overrides=[
+                "algorithm.trainer_type=policy_gradient"
+                if rollout_name == "native"
+                else "algorithm.trainer_type=unigrpo",
+                f"actor_rollout_ref.rollout.name={rollout_name}",
+            ],
         )
     monkeypatch.setattr(main_diffusion.ray, "remote", lambda cls: cls)
     runner = main_diffusion.TaskRunner()
@@ -50,35 +54,31 @@ def test_runner_selects_worker_without_changing_group_role(monkeypatch, rollout_
 
 
 @pytest.mark.parametrize("role", ["actor", "actor_rollout"])
-def test_trainside_initializes_parent_as_actor(monkeypatch, role):
+def test_native_initializes_parent_as_actor(monkeypatch, role):
     init = Mock(return_value=None)
     monkeypatch.setattr(ActorRolloutRefWorker, "__init__", init)
     config = object()
-    TrainsideWorker(config=config, role=role)
+    NativeRolloutWorker(config=config, role=role)
     init.assert_called_once_with(config=config, role="actor", distillation_config=None, teacher_key=None)
-    assert TrainsideWorker.init_model is ActorRolloutRefWorker.init_model
+    assert NativeRolloutWorker.init_model is ActorRolloutRefWorker.init_model
 
 
 def test_reference_role_is_not_silently_dropped():
     with pytest.raises(ValueError, match="without a reference policy"):
-        TrainsideWorker(config=None, role="actor_rollout_ref")
+        NativeRolloutWorker(config=None, role="actor_rollout_ref")
 
 
-@pytest.mark.parametrize("method, engine_method", [("generate", "generate_rollout"), ("evaluate", "evaluate_rollout")])
+@pytest.mark.parametrize("method, engine_method", [("generate", "generate_rollout")])
 @pytest.mark.parametrize("has_output", [True, False])
 def test_dispatch_preserves_request_and_optional_output(method, engine_method, has_output):
     request = TensorDict({"input": torch.arange(2)}, [2])
     output = TensorDict({"result": torch.ones(2)}, [2]) if has_output else None
     callback = Mock(return_value=output)
     worker = SimpleNamespace(actor=SimpleNamespace(engine=SimpleNamespace(**{engine_method: callback})))
-    result = unwrap(getattr(TrainsideWorker, method))(worker, request)
+    result = unwrap(getattr(NativeRolloutWorker, method))(worker, request)
     callback.assert_called_once_with(request)
     if has_output:
         torch.testing.assert_close(result["result"], output["result"])
         assert result["result"].device.type == "cpu"
     else:
         assert result is None
-
-
-def test_evaluation_is_broadcast_for_collective_replica_sync():
-    assert getattr(TrainsideWorker.evaluate, MAGIC_ATTR)["dispatch_mode"] == Dispatch.ONE_TO_ALL

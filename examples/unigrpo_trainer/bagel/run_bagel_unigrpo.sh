@@ -1,11 +1,11 @@
-# BAGEL UniGRPO: joint AR-"thinking" + image RL with a trainside rollout (no vLLM).
+# BAGEL UniGRPO: joint AR-"thinking" + image RL with a native rollout (no vLLM).
 #
 # One shared BAGEL-7B-MoT transformer generates an AR reasoning chain (understanding
 # experts) then renders an image (generation `moe_gen` experts) conditioned on prompt +
 # thinking. PickScore rewards the image; per-prompt-group GRPO advantages are shared by the
 # AR and image tracks; a joint 2-backwards -> 1-step update trains both experts with
-# per-expert learning rates. Selected via algorithm.trainer_type=unigrpo and the trainside
-# rollout (actor_rollout_ref.rollout.name=trainside), which samples on the live FSDP actor
+# per-expert learning rates. Selected via algorithm.trainer_type=unigrpo and the native
+# rollout (actor_rollout_ref.rollout.name=native), which samples on the live FSDP actor
 # module through a flat bf16 replica instead of a vLLM server.
 #
 # Prerequisite: preprocess the PickScore dataset for BAGEL (native prompt_token_ids column):
@@ -60,7 +60,7 @@ python3 -m verl_omni.trainer.main_diffusion \
     actor_rollout_ref.actor.diffusion_loss.clip_ratio=1e-6 \
     actor_rollout_ref.actor.diffusion_loss.mse_weight=1.5e-5 \
     actor_rollout_ref.actor.diffusion_loss.ratio_norm=True \
-    actor_rollout_ref.rollout.name=trainside \
+    actor_rollout_ref.rollout.name=native \
     actor_rollout_ref.rollout.n=8 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.pipeline.height=512 \

@@ -30,22 +30,22 @@ Gradients from both losses accumulate in the same transformer before **one optim
 
 ## Sampling and replay
 
-The implemented recipe uses torch-only trainside sampling. Each actor rank synchronizes a flat bf16 replica from its FSDP2 training weights, generates a variable-length thinking chain with KV caching, then samples an image. This avoids FSDP collectives inside variable-length decoding. The replica is parked on CPU before training replay to release accelerator memory.
+The implemented recipe uses torch-only native sampling. Each actor rank synchronizes a flat bf16 replica from its FSDP2 training weights, generates a variable-length thinking chain with KV caching, then samples an image. This avoids FSDP collectives inside variable-length decoding. The replica is parked on CPU before training replay to release accelerator memory.
 
 Before returning the rollout, `record_old_logp` recomputes AR and image log probabilities on the training module. This anchors the update-zero ratio to one despite numerical differences between replica sampling and FSDP replay; the denominator is the replayed training-policy likelihood, not the unmodified replica likelihood. Later minibatch updates use these fixed denominators and become off-policy. The default recipe uses two joint updates per rollout batch.
 
-The training defaults are 512×512 images, 25 denoising steps, a three-step SDE window in the early high-noise portion of the schedule, noise level 0.8, and no training CFG. Optional report evaluation uses official CFG settings and preserves the training RNG state.
+The training defaults are 512×512 images, 25 denoising steps, a three-step SDE window in the early high-noise portion of the schedule, noise level 0.8, and no training CFG. The standard validation loop is skipped because native rollout has no separate validation server.
 
 ## Framework integration
 
 The recipe selects the shared `PPODiffusersFSDPEngine` with `model_type=diffusion_model`. The `(OmniBagelForConditionalGeneration, unigrpo)` adapter supplies two extension hooks:
 
 - `fsdp2_sharding_units(module)` selects transformer layers and the root leaves used by functional AR/image forwards. The engine applies its precision, offload and sharding policies. Other adapters return `None` and keep the default wrapping path.
-- `build_engine_hooks(module, model_config, optimizer_config)` creates `BagelUniGRPOHooks`. It supplies joint backward, generation and evaluation through the `DiffusionEngineHooks` contract. Other adapters return `None` and keep the existing training loop.
+- `build_engine_hooks(module, model_config, optimizer_config)` creates `BagelUniGRPOHooks`. It supplies joint backward and generation through the `DiffusionEngineHooks` contract. Other adapters return `None` and keep the existing training loop.
 
 The hooks accumulate gradients without owning an optimizer. Zeroing gradients, clipping, the optimizer step, scheduling and checkpoint management remain in the shared engine. Explicit leaf sharding uses shard-aware norm clipping over the FSDP mesh, avoiding per-parameter DTensor reductions. Optimizer parameter groups preserve the configured optimizer implementation and options; the first matching name substring wins.
 
-For `algorithm.trainer_type=unigrpo`, `rollout.name=trainside` selects `TrainsideWorker`, a thin subclass of the shared worker that dispatches `generate` and `evaluate` requests. It initializes the parent with the actor role to reuse model setup, updates and checkpoints without creating a separate rollout engine. BAGEL-specific token/trajectory handling lives in the hook implementation, and fixed-prompt PickScore evaluation plus file export lives in `BagelReportEvaluator`. Evaluation is broadcast to all ranks for weight synchronization, then only rank zero exports samples.
+For `algorithm.trainer_type=unigrpo`, `rollout.name=native` selects `NativeRolloutWorker`, a thin subclass of the shared worker that dispatches `generate` requests. It initializes the parent with the actor role to reuse model setup, updates and checkpoints without creating a separate rollout engine. BAGEL-specific token and trajectory handling remains inside the model adapter and hook implementation.
 
 ## Configuration and usage
 
@@ -76,11 +76,11 @@ actor_rollout_ref:
       mse_weight: 1.5e-5
       ratio_norm: true
   rollout:
-    name: trainside
+    name: native
     n: 8
 ```
 
-See the [BAGEL recipe](../examples/bagel/unigrpo_trainer_bagel.md) for dataset preparation, resource requirements and report export. Full fine-tuning with FSDP2 and CUDA is the validated path; this recipe does not establish FSDP1, NPU, LoRA or vLLM rollout support. It implements the $M=1$ shared-advantage setting, and does not claim to reproduce the paper's absolute benchmark scores. The regularizer snapshot is held by the hooks rather than checkpointed: restarting from a checkpoint initializes a new reference snapshot before its first image update.
+See the [BAGEL recipe](../examples/bagel/unigrpo_trainer_bagel.md) for dataset preparation and resource requirements. Full fine-tuning with FSDP2 and CUDA is the validated path; this recipe does not establish FSDP1, NPU, LoRA or vLLM rollout support. It implements the $M=1$ shared-advantage setting, and does not claim to reproduce the paper's absolute benchmark scores. The regularizer snapshot is held by the hooks rather than checkpointed: restarting from a checkpoint initializes a new reference snapshot before its first image update.
 
 ## References
 

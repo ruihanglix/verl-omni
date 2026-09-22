@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Worker entry points for actor-side (trainside) sampling."""
+"""Worker entry points for actor-side (native) sampling."""
 
 from tensordict import TensorDict
-from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
+from verl.single_controller.base.decorator import make_nd_compute_dataproto_dispatch_fn, register
 from verl.utils.profiler import DistProfiler
 
 from verl_omni.workers.engine_workers import ActorRolloutRefWorker, _with_routing_replay_flag
 
 
-class TrainsideWorker(ActorRolloutRefWorker):
+class NativeRolloutWorker(ActorRolloutRefWorker):
     """Run a colocated actor without constructing a separate rollout engine.
 
     The trainer groups this worker under its actor/rollout role. Internally, the parent
@@ -31,7 +31,7 @@ class TrainsideWorker(ActorRolloutRefWorker):
 
     def __init__(self, config, role, distillation_config=None, teacher_key=None, **kwargs):
         if role not in ("actor", "actor_rollout"):
-            raise ValueError(f"TrainsideWorker requires an actor role without a reference policy, got {role!r}.")
+            raise ValueError(f"NativeRolloutWorker requires an actor role without a reference policy, got {role!r}.")
         super().__init__(
             config=config,
             role="actor",
@@ -49,13 +49,4 @@ class TrainsideWorker(ActorRolloutRefWorker):
         if generate is None:
             raise NotImplementedError(f"{type(self.actor.engine).__name__} does not support actor-side generation")
         output = generate(data)
-        return output.cpu() if output is not None else None
-
-    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def evaluate(self, data: TensorDict) -> TensorDict | None:
-        """Broadcast evaluation so every actor rank participates in hook collectives."""
-        evaluate = getattr(self.actor.engine, "evaluate_rollout", None)
-        if evaluate is None:
-            raise NotImplementedError(f"{type(self.actor.engine).__name__} does not support actor-side evaluation")
-        output = evaluate(data)
         return output.cpu() if output is not None else None

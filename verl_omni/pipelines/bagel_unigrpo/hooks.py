@@ -29,21 +29,9 @@ class BagelUniGRPOHooks(DiffusionEngineHooks):
         self.optimizer_config = optimizer_config
         self._updater = None
         self._replica = None
-        self._evaluator = None
-
-    def evaluate(self, data):
-        """Run optional recipe evaluation; every rank participates in weight sync."""
-        from verl.utils.device import get_device_id, get_device_name
-
-        from .evaluation import BagelReportEvaluator
-
-        if self._evaluator is None:
-            self._evaluator = BagelReportEvaluator(self)
-        with torch.random.fork_rng(devices=[get_device_id()], device_type=get_device_name()):
-            return self._evaluator.evaluate(data)
 
     def _get_updater(self, loss_cfg=None):
-        """Lazily build the joint updater over a trainside pipeline bound to the FSDP module.
+        """Lazily build the joint updater over a native pipeline bound to the FSDP module.
 
         ``loss_cfg`` is the actor ``diffusion_loss`` config (threaded from the loss function in
         ``forward_backward_batch``); it makes ``clip_ratio``/``mse_weight``/``ratio_norm``/
@@ -77,7 +65,7 @@ class BagelUniGRPOHooks(DiffusionEngineHooks):
         return self._updater
 
     def generate(self, data):
-        """Trainside rollout: sample thinking->image on a flat bf16 replica, then anchor ``old_logp``.
+        """Native rollout: sample thinking->image on a flat bf16 replica, then anchor ``old_logp``.
 
         The replica (a plain, frozen, full-param bf16 ``BagelForSFT``) is re-synced from the FSDP
         master each call and drives the collective-free per-rank AR decode + Flow-SDE image sampler.
