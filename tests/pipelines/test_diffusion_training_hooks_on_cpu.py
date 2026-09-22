@@ -26,8 +26,7 @@ from verl.workers.config import FSDPOptimizerConfig
 
 from verl_omni.pipelines.bagel_unigrpo.diffusers_training_adapter import BagelUniGRPO
 from verl_omni.pipelines.bagel_unigrpo.training_runtime import BagelUniGRPORuntime
-from verl_omni.pipelines.model_base import DiffusionModelBase
-from verl_omni.pipelines.training_runtime import DiffusionTrainingRuntime
+from verl_omni.pipelines.model_base import DiffusionModelBase, DiffusionTrainingRuntime
 from verl_omni.workers.engine.fsdp.diffusers_impl import PPODiffusersFSDPEngine
 from verl_omni.workers.engine.fsdp.training_utils import optimizer_parameters
 

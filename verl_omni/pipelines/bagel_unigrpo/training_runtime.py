@@ -17,7 +17,7 @@
 import torch
 from verl.utils import tensordict_utils as tu
 
-from verl_omni.pipelines.training_runtime import DiffusionTrainingRuntime
+from verl_omni.pipelines.model_base import DiffusionTrainingRuntime
 
 
 class BagelUniGRPORuntime(DiffusionTrainingRuntime):
