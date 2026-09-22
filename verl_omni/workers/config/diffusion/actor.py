@@ -143,7 +143,7 @@ class FSDPDiffusionOptimizerConfig(FSDPOptimizerConfig):
     # Per-expert LR groups for the FSDP diffusion actor: a trainable param whose name contains a
     # key substring uses that group's LR, the rest use the base ``lr``. UniGRPO sets
     # {"moe_gen": <generation-expert lr>} so the und/base params keep ``lr`` and the moe_gen
-    # experts train faster. Read by the custom UniGRPO FSDP engine's ``_build_optimizer``.
+    # experts train faster. Read by the shared diffusion FSDP optimizer builder; first match wins.
     param_group_lrs: dict | None = None
 
 

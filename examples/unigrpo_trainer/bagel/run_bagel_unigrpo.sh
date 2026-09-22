@@ -43,12 +43,13 @@ python3 -m verl_omni.trainer.main_diffusion \
     actor_rollout_ref.model.tokenizer_path=$model_name \
     +actor_rollout_ref.model.architecture=OmniBagelForConditionalGeneration \
     actor_rollout_ref.model.algorithm=unigrpo \
-    actor_rollout_ref.model.model_type=diffusion_unigrpo_model \
+    actor_rollout_ref.model.model_type=diffusion_model \
     actor_rollout_ref.model.trust_remote_code=True \
     actor_rollout_ref.model.fsdp_layer_prefixes="['layers.']" \
     actor_rollout_ref.actor.strategy=fsdp2 \
     actor_rollout_ref.actor.optim._target_=verl_omni.workers.config.diffusion.FSDPDiffusionOptimizerConfig \
     actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.override_optimizer_config="{foreach: false}" \
     +actor_rollout_ref.actor.optim.param_group_lrs="{moe_gen: 3e-5}" \
     actor_rollout_ref.actor.ppo_mini_batch_size=4 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \

@@ -100,6 +100,25 @@ class DiffusionModelBase(ABC):
         return None
 
     @classmethod
+    def fsdp2_sharding_units(cls, module: torch.nn.Module) -> Optional[list[torch.nn.Module]]:
+        """Return explicit FSDP2 units in wrapping order, or None for default wrapping.
+
+        Used by models that call submodules directly instead of the root forward.
+        The engine applies its own precision/offload policies to every returned unit.
+        Such models require FSDP2; the root is only wrapped if included in the list.
+        """
+        return None
+
+    @classmethod
+    def build_training_runtime(cls, module, model_config, optimizer_config):
+        """Build optional DiffusionTrainingRuntime hooks; None keeps the default loop.
+
+        Called once after model sharding. Runtime state is local to this engine instance;
+        it must not own an optimizer or retain a reference to the engine itself.
+        """
+        return None
+
+    @classmethod
     def configure_train_mode(cls, module: torch.nn.Module) -> None:
         """Hook called after ``module.train()`` for architecture-specific overrides."""
         return

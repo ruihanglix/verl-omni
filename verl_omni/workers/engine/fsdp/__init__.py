@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .bagel_unigrpo_impl import UniGRPODiffusersFSDPEngine  # noqa: F401
 from .diffusers_impl import (  # noqa: F401
     DiffusersFSDPEngine,
     DPODiffusersFSDPEngine,
@@ -27,5 +26,4 @@ __all__ = [
     "NFTDiffusersFSDPEngine",
     "DiffusersFSDPEngine",
     "OmniFSDPEngine",
-    "UniGRPODiffusersFSDPEngine",
 ]

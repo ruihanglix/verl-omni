@@ -28,7 +28,7 @@ what UniGRPO needs:
   freezes everything but ``moe_gen``, which would disable the AR-GRPO backward.
 
 The joint 2-backwards->1-step update, the AR-thinking decode and the velocity-MSE
-reference live in the UniGRPO engine / ``UniGRPOJointUpdater``, not here.
+reference live in ``BagelUniGRPORuntime`` / ``UniGRPOJointUpdater``.
 """
 
 from __future__ import annotations
@@ -81,6 +81,20 @@ class BagelUniGRPO(BagelDiffusion):
         for param in module.parameters():
             if param.requires_grad:
                 param.data = param.data.to(torch.float32)
+
+    @classmethod
+    def fsdp2_sharding_units(cls, module):
+        """Shard every transformer block and each leaf reached outside root forward."""
+        inner = getattr(module, "module", module)
+        leaves = ("embed_tokens", "lm_head", "norm", "norm_moe_gen", "time_embedder", "vae2llm", "llm2vae")
+        return list(inner.layers) + [getattr(inner, name) for name in leaves if getattr(inner, name, None) is not None]
+
+    @classmethod
+    def build_training_runtime(cls, module, model_config, optimizer_config):
+        """Attach joint backward and trainside sampling to the shared PPO engine."""
+        from .training_runtime import BagelUniGRPORuntime
+
+        return BagelUniGRPORuntime(module, model_config, optimizer_config)
 
     @classmethod
     def build_scheduler(cls, model_config: DiffusionModelConfig):

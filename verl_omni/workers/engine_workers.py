@@ -178,7 +178,6 @@ class TrainingWorker(Worker, DistProfilerExtension):
             "diffusion_model",
             "diffusion_dpo_model",
             "diffusion_nft_model",
-            "diffusion_unigrpo_model",
         ):
             self.flops_counter = DiffusionFlopsCounter(
                 architecture=getattr(self.model_config, "architecture", None),
@@ -632,7 +631,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             "diffusion_model",
             "diffusion_dpo_model",
             "diffusion_nft_model",
-            "diffusion_unigrpo_model",
         )
 
         # 1. build reference model
@@ -917,36 +915,25 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @DistProfiler.annotate(color="green", role="generate")
     @_with_routing_replay_flag(enabled=True)
     def generate(self, data: TensorDict) -> TensorDict:
-        """Trainside UniGRPO rollout on the live FSDP actor module (no vLLM).
-
-        Delegates to the custom UniGRPO engine's ``generate_rollout``: sample thinking->image on a flat
-        bf16 replica synced from the FSDP master, re-anchor ``old_logp`` to the training module, and
-        return per-sample ``responses`` (uint8 images for reward/validation/logging) plus
-        ``unigrpo_samples`` (the rollout trajectories) for advantage + the joint ``update_actor``.
-        """
-        engine = self.actor.engine
-        if not hasattr(engine, "generate_rollout"):
-            raise NotImplementedError(
-                "Worker.generate (rollout.name=trainside) requires a UniGRPO engine exposing "
-                f"generate_rollout; got {type(engine).__name__}. Set model.model_type=diffusion_unigrpo_model."
-            )
-        output = engine.generate_rollout(data)
+        """Dispatch a local generation batch to an engine with actor-side sampling."""
+        generate = getattr(self.actor.engine, "generate_rollout", None)
+        if generate is None:
+            raise NotImplementedError(f"{type(self.actor.engine).__name__} does not support actor-side generation")
+        output = generate(data)
         return output.cpu() if output is not None else None
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def dump_report_samples(self, eval_prompts, eval_gts, out_dir, step, seed=1234):
-        """Trainside UniGRPO report dump: replica sync (all ranks) + rank-0 official-CFG eval.
+    def evaluate(self, data: TensorDict) -> TensorDict | None:
+        """Broadcast evaluation to all ranks so engines can synchronize model state.
 
-        Delegates to the custom UniGRPO engine's ``dump_report_samples`` (returns ``None`` on engines
-        that do not expose it). Dispatched ONE_TO_ALL so every actor rank reaches the replica-sync
-        collective; only rank 0 samples + writes the report artifacts and returns its per-prompt
-        PickScores. Non-fatal: a failed dump must not abort training.
+        The engine owns sampling semantics; ranks without output may return None.
+        File formats, metrics and export policies belong to the selected evaluator.
         """
-        actor = getattr(self, "actor", None)
-        engine = getattr(actor, "engine", None) if actor is not None else None
-        if engine is None or not hasattr(engine, "dump_report_samples"):
-            return None
-        return engine.dump_report_samples(eval_prompts, eval_gts, out_dir, step, seed)
+        evaluate = getattr(self.actor.engine, "evaluate_rollout", None)
+        if evaluate is None:
+            raise NotImplementedError(f"{type(self.actor.engine).__name__} does not support actor-side evaluation")
+        output = evaluate(data)
+        return output.cpu() if output is not None else None
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def get_lora_peft_config(self):

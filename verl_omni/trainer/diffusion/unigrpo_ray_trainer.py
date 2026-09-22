@@ -214,9 +214,11 @@ class UniGRPORayTrainer(PolicyGradientRayTrainer):
         if not getattr(self, "_report_dir", None):
             return
         try:
-            self.actor_rollout_wg.dump_report_samples(
-                self._eval_prompts, self._eval_gts, self._report_dir, int(step), self._report_seed
-            )
+            from verl.utils import tensordict_utils as tu
+
+            request = tu.get_tensordict({"prompt_token_ids": self._eval_prompts, "ground_truth": self._eval_gts})
+            tu.assign_non_tensor(request, output_dir=self._report_dir, step=int(step), seed=self._report_seed)
+            self.actor_rollout_wg.evaluate(request)
         except Exception:
             import traceback
 
