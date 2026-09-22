@@ -1,6 +1,6 @@
 # UniGRPO
 
-Last updated: 09/21/2026.
+Last updated: 09/22/2026.
 
 [UniGRPO](https://arxiv.org/abs/2603.23500) jointly optimizes autoregressive reasoning and image generation in a shared model. The BAGEL recipe generates a thinking chain with the understanding experts, conditions image generation on the prompt and that chain, and uses the image reward to train both paths. It builds on the existing [BAGEL FlowGRPO recipe](../examples/bagel/flowgrpo_trainer_bagel.md) and [GRPO-Guard](grpo_guard.md).
 
@@ -45,7 +45,7 @@ The recipe selects the shared `PPODiffusersFSDPEngine` with `model_type=diffusio
 
 The hooks accumulate gradients without owning an optimizer. Zeroing gradients, clipping, the optimizer step, scheduling and checkpoint management remain in the shared engine. Explicit leaf sharding uses shard-aware norm clipping over the FSDP mesh, avoiding per-parameter DTensor reductions. Optimizer parameter groups preserve the configured optimizer implementation and options; the first matching name substring wins.
 
-The shared worker only dispatches `generate` and `evaluate` requests. BAGEL-specific token/trajectory handling lives in the hook implementation, and fixed-prompt PickScore evaluation plus file export lives in `BagelReportEvaluator`. Evaluation is broadcast to all ranks for weight synchronization, then only rank zero exports samples.
+For `algorithm.trainer_type=unigrpo`, `rollout.name=trainside` selects `TrainsideWorker`, a thin subclass of the shared worker that dispatches `generate` and `evaluate` requests. It initializes the parent with the actor role to reuse model setup, updates and checkpoints without creating a separate rollout engine. BAGEL-specific token/trajectory handling lives in the hook implementation, and fixed-prompt PickScore evaluation plus file export lives in `BagelReportEvaluator`. Evaluation is broadcast to all ranks for weight synchronization, then only rank zero exports samples.
 
 ## Configuration and usage
 

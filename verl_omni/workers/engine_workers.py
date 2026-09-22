@@ -174,11 +174,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
 
         if getattr(self.model_config, "hf_config", None) is not None:
             self.flops_counter = FlopsCounter(self.model_config.hf_config)
-        elif self.config.model_type in (
-            "diffusion_model",
-            "diffusion_dpo_model",
-            "diffusion_nft_model",
-        ):
+        elif self.config.model_type in ("diffusion_model", "diffusion_dpo_model", "diffusion_nft_model"):
             self.flops_counter = DiffusionFlopsCounter(
                 architecture=getattr(self.model_config, "architecture", None),
                 transformer_config=getattr(self.model_config, "transformer_config", None),
@@ -801,10 +797,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self._init_weight_sync_knobs(model_config)
 
         # 3. build rollout engine
-        # Trainside UniGRPO samples on the live FSDP actor module via the worker `generate`
-        # method, so no vLLM rollout engine is built when rollout.name == "trainside".
-        self.rollout = None
-        if "rollout" in self.role and self.config.rollout.get("name") != "trainside":
+        if "rollout" in self.role:
             rollout_config: RolloutConfig = omega_conf_to_dataclass(self.config.rollout)
 
             # TODO: move rollout_device_mesh into ServerAdapter
@@ -909,30 +902,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             use_no_sync_for_gradient_accumulation=self.config.actor.get("use_no_sync_for_gradient_accumulation", False),
         )
         output = self.actor.train_mini_batch(data=data)
-        return output.cpu() if output is not None else None
-
-    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
-    @DistProfiler.annotate(color="green", role="generate")
-    @_with_routing_replay_flag(enabled=True)
-    def generate(self, data: TensorDict) -> TensorDict:
-        """Dispatch a local generation batch to an engine with actor-side sampling."""
-        generate = getattr(self.actor.engine, "generate_rollout", None)
-        if generate is None:
-            raise NotImplementedError(f"{type(self.actor.engine).__name__} does not support actor-side generation")
-        output = generate(data)
-        return output.cpu() if output is not None else None
-
-    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def evaluate(self, data: TensorDict) -> TensorDict | None:
-        """Broadcast evaluation to all ranks so engines can synchronize model state.
-
-        The engine owns sampling semantics; ranks without output may return None.
-        File formats, metrics and export policies belong to the selected evaluator.
-        """
-        evaluate = getattr(self.actor.engine, "evaluate_rollout", None)
-        if evaluate is None:
-            raise NotImplementedError(f"{type(self.actor.engine).__name__} does not support actor-side evaluation")
-        output = evaluate(data)
         return output.cpu() if output is not None else None
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)

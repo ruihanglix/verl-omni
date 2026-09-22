@@ -196,6 +196,13 @@ class TaskRunner:
         from verl_omni.workers.engine_workers import ActorRolloutRefWorker
 
         actor_rollout_cls = ActorRolloutRefWorker
+        if (
+            config.algorithm.trainer_type == "unigrpo"
+            and OmegaConf.select(config, "actor_rollout_ref.rollout.name") == "trainside"
+        ):
+            from verl_omni.workers.trainside_workers import TrainsideWorker
+
+            actor_rollout_cls = TrainsideWorker
         ray_worker_group_cls = RayWorkerGroup
 
         lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)

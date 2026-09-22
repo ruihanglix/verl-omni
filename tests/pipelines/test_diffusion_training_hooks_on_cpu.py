@@ -148,13 +148,13 @@ def test_actor_loss_config_applies_even_when_rollout_created_updater_first():
 
 
 def test_worker_dispatch_is_algorithm_independent():
-    from verl_omni.workers.engine_workers import ActorRolloutRefWorker
+    from verl_omni.workers.trainside_workers import TrainsideWorker
 
     output = TensorDict({"result": torch.ones(1)}, [1])
     engine = SimpleNamespace(evaluate_rollout=Mock(return_value=output))
     worker = SimpleNamespace(actor=SimpleNamespace(engine=engine))
     request = TensorDict({"input": torch.zeros(1)}, [1])
-    assert ActorRolloutRefWorker.evaluate.__wrapped__(worker, request)["result"].item() == 1.0
+    assert TrainsideWorker.evaluate.__wrapped__(worker, request)["result"].item() == 1.0
     engine.evaluate_rollout.assert_called_once_with(request)
 
 
